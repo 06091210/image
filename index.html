@@ -1,352 +1,105 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>指定色だけ透過して合成＆ダウンロード</title>
+<meta charset="UTF-8">
+<title>画像合成＆色透過</title>
 <style>
-  :root { --gap: 12px; }
-  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background:#111; color:#eee; }
-  header { padding: 16px; text-align: center; font-weight: 700; }
-  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 16px 24px; }
-  .panel { display: grid; gap: var(--gap); grid-template-columns: 1fr; }
-  .controls, .canvasWrap { background:#1b1b1b; border-radius: 16px; padding: 16px; box-shadow: 0 6px 20px rgba(0,0,0,.3); }
-  .row { display:flex; flex-wrap:wrap; gap:var(--gap); align-items:center; }
-  label.file {
-    display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 999px;
-    background:#2a2a2a; cursor: pointer; user-select: none;
-  }
-  label.file input { display:none; }
-  .hint { opacity:.8; font-size:.9rem; }
-  .grid { display:grid; gap:14px; }
-  .slider { display:grid; grid-template-columns: 110px 1fr 64px; gap:10px; align-items:center; }
-  .colorRow { display:grid; grid-template-columns: 110px 110px 1fr; gap:10px; align-items:center; }
-  input[type="range"] { width:100%; }
-  input[type="text"] {
-    background:#2a2a2a; color:#fff; border:1px solid #444; border-radius:10px; padding:8px 10px; width:100%;
-  }
-  button {
-    padding: 10px 14px; border-radius: 12px; border: none; background:#3a3a3a; color:#fff; cursor:pointer;
-  }
-  button.primary { background:#5a6fff; }
-  canvas { width:100%; height:auto; background:#000; border-radius: 12px; display:block; }
-  .badge { font-size:.85rem; opacity:.8; }
-  @media (min-width: 840px) { .panel { grid-template-columns: 360px 1fr; } }
+  body { font-family: sans-serif; }
+  canvas { border: 1px solid #ccc; max-width: 100%; }
 </style>
 </head>
 <body>
-  <header>指定色に合致した部分のみ透過 → 画像Bへ合成 → PNG保存</header>
-  <div class="wrap">
-    <div class="panel">
-      <div class="controls">
-        <div class="row" style="justify-content:space-between;">
-          <label class="file">画像A（透過対象を含む）
-            <input id="fileA" type="file" accept="image/*">
-          </label>
-          <label class="file">画像B（背景）
-            <input id="fileB" type="file" accept="image/*">
-          </label>
-        </div>
+<h3>画像A（透過対象）</h3>
+<input type="file" id="imgAInput" accept="image/*"><br>
 
-        <div class="grid" style="margin-top:16px;">
-          <div class="colorRow">
-            <div>透過色</div>
-            <input id="colorPicker" type="color" value="#ffffff" />
-            <input id="hexInput" type="text" value="#ffffff" placeholder="#RRGGBB" />
-          </div>
+<h3>画像B（背景）</h3>
+<input type="file" id="imgBInput" accept="image/*"><br>
 
-          <div class="slider">
-            <div>許容差（0=完全一致）</div>
-            <input id="tolerance" type="range" min="0" max="50" value="0" />
-            <output id="tolOut">0</output>
-          </div>
+<h3>透過する色（カラーコード）</h3>
+<input type="color" id="colorInput" value="#ffffff"><br><br>
 
-          <div class="slider">
-            <div>Aの不透明度</div>
-            <input id="opacity" type="range" min="0" max="100" value="100" />
-            <output id="opacityOut">100%</output>
-          </div>
+<button id="mergeBtn">合成</button>
+<button id="downloadBtn">ダウンロード</button>
+<br><br>
 
-          <div class="slider">
-            <div>Aの拡大率</div>
-            <input id="scale" type="range" min="10" max="300" value="100" />
-            <output id="scaleOut">100%</output>
-          </div>
-
-          <div class="row" style="justify-content:space-between;">
-            <span class="hint">※ A画像はキャンバス上でドラッグで移動（タッチ対応）。</span>
-            <div class="row">
-              <button id="fitA">Aを中央へ</button>
-              <button id="reset">リセット</button>
-              <button id="download" class="primary">PNGをダウンロード</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="canvasWrap">
-        <div class="row" style="justify-content:space-between;margin-bottom:8px;">
-          <div class="badge">プレビュー</div>
-          <div class="badge" id="sizeInfo">キャンバス: - × -</div>
-        </div>
-        <canvas id="c"></canvas>
-      </div>
-    </div>
-  </div>
+<canvas id="canvas"></canvas>
 
 <script>
-(function(){
-  const $ = (s)=>document.querySelector(s);
-  const c = $("#c");
-  const ctx = c.getContext("2d", { willReadFrequently: true });
+const imgAInput = document.getElementById('imgAInput');
+const imgBInput = document.getElementById('imgBInput');
+const colorInput = document.getElementById('colorInput');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
 
-  // UI
-  const fileA = $("#fileA");
-  const fileB = $("#fileB");
-  const colorPicker = $("#colorPicker");
-  const hexInput = $("#hexInput");
-  const tolerance = $("#tolerance"); const tolOut = $("#tolOut");
-  const opacity = $("#opacity"); const opacityOut = $("#opacityOut");
-  const scale = $("#scale"); const scaleOut = $("#scaleOut");
-  const btnFitA = $("#fitA");
-  const btnReset = $("#reset");
-  const btnDownload = $("#download");
-  const sizeInfo = $("#sizeInfo");
+let imgA = new Image();
+let imgB = new Image();
 
-  // State
-  let imgA = null, imgB = null;
-  let maskedABitmap = null;
-  let maskedAImg = null;
-  let ax = 0, ay = 0;
-  let aScale = 1;
-  let dragging = false, dragStart = {x:0,y:0}, startPos = {x:0,y:0};
+function loadImage(file, callback) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    callback(img);
+  };
+  img.src = url;
+}
 
-  function loadImageFromFile(file){
-    return new Promise((resolve,reject)=>{
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
-      img.onerror = (e)=>{ URL.revokeObjectURL(url); reject(e); };
-      img.src = url;
+document.getElementById('mergeBtn').onclick = () => {
+  if (!imgAInput.files[0] || !imgBInput.files[0]) {
+    alert("画像AとBを選択してください");
+    return;
+  }
+  
+  loadImage(imgBInput.files[0], (loadedB) => {
+    imgB = loadedB;
+    loadImage(imgAInput.files[0], (loadedA) => {
+      imgA = loadedA;
+      mergeImages();
     });
-  }
+  });
+};
 
-  function setCanvasToB(){
-    if(!imgB) return;
-    c.width = imgB.naturalWidth || imgB.width;
-    c.height = imgB.naturalHeight || imgB.height;
-    sizeInfo.textContent = `キャンバス: ${c.width} × ${c.height}px`;
-  }
-
-  function centerA(){
-    if(!imgA || !c.width) return;
-    const aw = (imgA.naturalWidth || imgA.width) * aScale;
-    const ah = (imgA.naturalHeight || imgA.height) * aScale;
-    ax = (c.width - aw)/2;
-    ay = (c.height - ah)/2;
-  }
-
-  function parseHexColor(hex){
-    const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
-    if(!m) return null;
-    const n = parseInt(m[1], 16);
-    return { r: (n>>16)&255, g: (n>>8)&255, b: n&255 };
-  }
-
-  function syncHexInputs(fromPicker){
-    if(fromPicker){
-      hexInput.value = colorPicker.value.toLowerCase();
-    } else {
-      const v = parseHexColor(hexInput.value);
-      if(v){
-        const s = "#" + ((1<<24) + (v.r<<16) + (v.g<<8) + v.b).toString(16).slice(1);
-        colorPicker.value = s;
-        hexInput.value = s;
-      } else {
-        // 形式が不正ならピッカーの値に戻す
-        hexInput.value = colorPicker.value.toLowerCase();
-      }
+function mergeImages() {
+  canvas.width = imgB.width;
+  canvas.height = imgB.height;
+  
+  // 背景Bを描画
+  ctx.drawImage(imgB, 0, 0);
+  
+  // Aを描画
+  ctx.drawImage(imgA, 0, 0);
+  
+  // 指定色を透過
+  let imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  let data = imgData.data;
+  
+  const targetColor = hexToRgb(colorInput.value);
+  
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i] === targetColor.r &&
+        data[i+1] === targetColor.g &&
+        data[i+2] === targetColor.b) {
+      data[i+3] = 0; // アルファ値を0に
     }
   }
+  
+  ctx.putImageData(imgData, 0, 0);
+}
 
-  function rebuildMaskedA(){
-    if(!imgA) return;
-    const w = imgA.naturalWidth || imgA.width;
-    const h = imgA.naturalHeight || imgA.height;
+function hexToRgb(hex) {
+  let bigint = parseInt(hex.slice(1), 16);
+  let r = (bigint >> 16) & 255;
+  let g = (bigint >> 8) & 255;
+  let b = bigint & 255;
+  return {r, g, b};
+}
 
-    const off = document.createElement("canvas");
-    off.width = w; off.height = h;
-    const octx = off.getContext("2d", { willReadFrequently: true });
-    octx.drawImage(imgA, 0, 0);
-
-    const target = parseHexColor(hexInput.value) || parseHexColor(colorPicker.value) || {r:255,g:255,b:255};
-    const tol = parseInt(tolerance.value, 10) || 0;
-
-    const imgData = octx.getImageData(0,0,w,h);
-    const data = imgData.data;
-
-    // 指定色と（許容差以内で）一致した画素だけ透明化
-    for (let i=0; i<data.length; i+=4){
-      const r = data[i], g = data[i+1], b = data[i+2];
-      if (Math.abs(r - target.r) <= tol &&
-          Math.abs(g - target.g) <= tol &&
-          Math.abs(b - target.b) <= tol){
-        data[i+3] = 0; // alpha=0（透過）
-      }
-    }
-    octx.putImageData(imgData, 0, 0);
-
-    maskedABitmap = off;
-    maskedAImg = new Image();
-    maskedAImg.src = off.toDataURL("image/png");
-  }
-
-  function redraw(){
-    if(!imgB || !c.width) return;
-    ctx.clearRect(0,0,c.width,c.height);
-    ctx.drawImage(imgB, 0, 0, c.width, c.height);
-
-    if (maskedAImg && imgA){
-      const ow = imgA.naturalWidth || imgA.width;
-      const oh = imgA.naturalHeight || imgA.height;
-      const drawW = Math.max(1, Math.round(ow * aScale));
-      const drawH = Math.max(1, Math.round(oh * aScale));
-
-      ctx.save();
-      ctx.globalAlpha = parseInt(opacity.value,10) / 100;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(maskedAImg, ax, ay, drawW, drawH);
-      ctx.restore();
-    }
-  }
-
-  function resetAll(){
-    colorPicker.value = "#ffffff";
-    hexInput.value = "#ffffff";
-    tolerance.value = 0; tolOut.textContent = "0";
-    opacity.value = 100; opacityOut.textContent = "100%";
-    scale.value = 100; scaleOut.textContent = "100%";
-    aScale = 1; ax = 0; ay = 0;
-    if (imgA && c.width) centerA();
-    rebuildMaskedA();
-    redraw();
-  }
-
-  // File events
-  fileA.addEventListener("change", async (e)=>{
-    const f = e.target.files?.[0];
-    if(!f) return;
-    imgA = await loadImageFromFile(f);
-    if (!c.width && imgB) setCanvasToB();
-    if (c.width && !imgB){
-      c.width = imgA.naturalWidth || imgA.width;
-      c.height = imgA.naturalHeight || imgA.height;
-      sizeInfo.textContent = `キャンバス: ${c.width} × ${c.height}px`;
-    }
-    aScale = 1;
-    centerA();
-    rebuildMaskedA();
-    redraw();
-  });
-
-  fileB.addEventListener("change", async (e)=>{
-    const f = e.target.files?.[0];
-    if(!f) return;
-    imgB = await loadImageFromFile(f);
-    setCanvasToB();
-    if (imgA) centerA();
-    rebuildMaskedA();
-    redraw();
-  });
-
-  // Color & sliders
-  colorPicker.addEventListener("input", ()=>{
-    syncHexInputs(true);
-    rebuildMaskedA(); redraw();
-  });
-  hexInput.addEventListener("input", ()=>{
-    syncHexInputs(false);
-    rebuildMaskedA(); redraw();
-  });
-
-  tolerance.addEventListener("input", ()=>{
-    tolOut.textContent = tolerance.value;
-    rebuildMaskedA(); redraw();
-  });
-
-  opacity.addEventListener("input", ()=>{
-    opacityOut.textContent = opacity.value + "%";
-    redraw();
-  });
-
-  scale.addEventListener("input", ()=>{
-    scaleOut.textContent = scale.value + "%";
-    aScale = parseInt(scale.value,10) / 100;
-    redraw();
-  });
-
-  // Buttons
-  btnFitA.addEventListener("click", ()=>{ centerA(); redraw(); });
-  btnReset.addEventListener("click", ()=>{ resetAll(); });
-  btnDownload.addEventListener("click", ()=>{
-    if (!c.width) return;
-    const url = c.toDataURL("image/png");
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "composited.png";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  });
-
-  // Drag to move A
-  function getEventPos(ev){
-    const rect = c.getBoundingClientRect();
-    const x = (("touches" in ev && ev.touches[0]) ? ev.touches[0].clientX : ev.clientX) - rect.left;
-    const y = (("touches" in ev && ev.touches[0]) ? ev.touches[0].clientY : ev.clientY) - rect.top;
-    return {
-      x: x * (c.width / rect.width),
-      y: y * (c.height / rect.height),
-    };
-  }
-  function isOverA(pos){
-    if (!imgA) return false;
-    const ow = (imgA.naturalWidth || imgA.width) * aScale;
-    const oh = (imgA.naturalHeight || imgA.height) * aScale;
-    return pos.x >= ax && pos.x <= ax + ow && pos.y >= ay && pos.y <= ay + oh;
-  }
-  let dragging = false, dragStart = {x:0,y:0}, startPos = {x:0,y:0};
-  c.addEventListener("mousedown", (e)=>{
-    const p = getEventPos(e);
-    if (isOverA(p)){ dragging = true; dragStart = p; startPos = { x: ax, y: ay }; }
-  });
-  window.addEventListener("mousemove", (e)=>{
-    if (!dragging) return;
-    const p = getEventPos(e);
-    ax = startPos.x + (p.x - dragStart.x);
-    ay = startPos.y + (p.y - dragStart.y);
-    redraw();
-  });
-  window.addEventListener("mouseup", ()=> dragging = false);
-
-  c.addEventListener("touchstart", (e)=>{
-    const p = getEventPos(e);
-    if (isOverA(p)){ dragging = true; dragStart = p; startPos = { x: ax, y: ay }; e.preventDefault(); }
-  }, {passive:false});
-  c.addEventListener("touchmove", (e)=>{
-    if (!dragging) return;
-    const p = getEventPos(e);
-    ax = startPos.x + (p.x - dragStart.x);
-    ay = startPos.y + (p.y - dragStart.y);
-    redraw();
-    e.preventDefault();
-  }, {passive:false});
-  c.addEventListener("touchend", ()=> dragging = false);
-
-  // 初期
-  resetAll();
-})();
+document.getElementById('downloadBtn').onclick = () => {
+  const link = document.createElement('a');
+  link.download = 'merged.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+};
 </script>
 </body>
 </html>
