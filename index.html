@@ -2,95 +2,118 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>画像合成（横幅揃え）</title>
+<title>画像合成（指定色透過＋横幅合わせ）</title>
 <style>
   body { font-family: sans-serif; }
   input { margin: 5px; }
 </style>
 </head>
 <body>
-<h2>画像合成ツール</h2>
-<input type="file" id="imageA" accept="image/*">
-<input type="file" id="imageB" accept="image/*">
-<br>
-<label>透過する色: <input type="color" id="transparentColor" value="#ffffff"></label>
-<br>
+<h2>画像A（前景）とB（背景）の合成</h2>
+
+<p>画像A: <input type="file" id="imageA" accept="image/*"></p>
+<p>画像B: <input type="file" id="imageB" accept="image/*"></p>
+<p>透過色（カラーコード例: #ffffff）: <input type="color" id="colorCode" value="#ffffff"></p>
+<p>許容差（0〜255）: <input type="number" id="tolerance" value="0" min="0" max="255"></p>
 <button id="mergeBtn">合成してダウンロード</button>
+
 <br><br>
-<canvas id="canvas"></canvas>
+<canvas id="canvas" style="border:1px solid #ccc;"></canvas>
 
 <script>
-function loadImage(file) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
-  });
+function hexToRgb(hex) {
+    hex = hex.replace(/^#/, '');
+    if (hex.length === 3) {
+        hex = hex.split('').map(function(h) {
+            return h + h;
+        }).join('');
+    }
+    var bigint = parseInt(hex, 16);
+    return {
+        r: (bigint >> 16) & 255,
+        g: (bigint >> 8) & 255,
+        b: bigint & 255
+    };
 }
 
-document.getElementById('mergeBtn').addEventListener('click', async () => {
-  const fileA = document.getElementById('imageA').files[0];
-  const fileB = document.getElementById('imageB').files[0];
-  if (!fileA || !fileB) {
-    alert('両方の画像を選択してください');
-    return;
-  }
-
-  const imgA = await loadImage(fileA);
-  const imgB = await loadImage(fileB);
-
-  // 横幅を基準にスケーリング
-  const targetWidth = Math.max(imgA.width, imgB.width);
-  const scaleA = targetWidth / imgA.width;
-  const scaleB = targetWidth / imgB.width;
-
-  const newAWidth = targetWidth;
-  const newAHeight = imgA.height * scaleA;
-  const newBWidth = targetWidth;
-  const newBHeight = imgB.height * scaleB;
-
-  // 背景キャンバス（B画像）を描画
-  const canvas = document.getElementById('canvas');
-  canvas.width = targetWidth;
-  canvas.height = Math.max(newAHeight, newBHeight);
-  const ctx = canvas.getContext('2d');
-
-  // B画像を拡大縮小して描画
-  ctx.drawImage(imgB, 0, 0, newBWidth, newBHeight);
-
-  // A画像を一時キャンバスで拡大縮小
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = newAWidth;
-  tempCanvas.height = newAHeight;
-  const tempCtx = tempCanvas.getContext('2d');
-  tempCtx.drawImage(imgA, 0, 0, newAWidth, newAHeight);
-
-  // 指定色を透過
-  const hex = document.getElementById('transparentColor').value;
-  const rT = parseInt(hex.substr(1, 2), 16);
-  const gT = parseInt(hex.substr(3, 2), 16);
-  const bT = parseInt(hex.substr(5, 2), 16);
-
-  const imgData = tempCtx.getImageData(0, 0, newAWidth, newAHeight);
-  const data = imgData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i], g = data[i+1], b = data[i+2];
-    if (r === rT && g === gT && b === bT) {
-      data[i+3] = 0; // alpha
+document.getElementById('mergeBtn').addEventListener('click', function() {
+    const fileA = document.getElementById('imageA').files[0];
+    const fileB = document.getElementById('imageB').files[0];
+    if (!fileA || !fileB) {
+        alert("画像AとBを選択してください");
+        return;
     }
-  }
-  tempCtx.putImageData(imgData, 0, 0);
 
-  // A画像をBの上に描画
-  ctx.drawImage(tempCanvas, 0, 0);
+    const imgA = new Image();
+    const imgB = new Image();
+    let loadedCount = 0;
 
-  // ダウンロード
-  const link = document.createElement('a');
-  link.download = 'merged.png';
-  link.href = canvas.toDataURL();
-  link.click();
+    function onLoad() {
+        loadedCount++;
+        if (loadedCount === 2) {
+            mergeImages(imgA, imgB);
+        }
+    }
+
+    imgA.onload = onLoad;
+    imgB.onload = onLoad;
+
+    imgA.src = URL.createObjectURL(fileA);
+    imgB.src = URL.createObjectURL(fileB);
 });
+
+function mergeImages(imgA, imgB) {
+    const colorCode = document.getElementById('colorCode').value;
+    const tolerance = parseInt(document.getElementById('tolerance').value, 10) || 0;
+    const targetColor = hexToRgb(colorCode);
+
+    // 横幅を合わせる
+    const targetWidth = Math.max(imgA.width, imgB.width);
+    const scaleA = targetWidth / imgA.width;
+    const scaleB = targetWidth / imgB.width;
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const heightB = imgB.height * scaleB;
+    const heightA = imgA.height * scaleA;
+    const canvasHeight = Math.max(heightA, heightB);
+
+    canvas.width = targetWidth;
+    canvas.height = canvasHeight;
+
+    // 背景B描画
+    ctx.drawImage(imgB, 0, 0, imgB.width, imgB.height, 0, 0, targetWidth, heightB);
+
+    // 前景Aを一時キャンバスに描画
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = targetWidth;
+    tempCanvas.height = heightA;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(imgA, 0, 0, imgA.width, imgA.height, 0, 0, targetWidth, heightA);
+
+    // ピクセル処理
+    const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i+1], b = data[i+2];
+        if (Math.abs(r - targetColor.r) <= tolerance &&
+            Math.abs(g - targetColor.g) <= tolerance &&
+            Math.abs(b - targetColor.b) <= tolerance) {
+            data[i+3] = 0; // alpha=0で透過
+        }
+    }
+    tempCtx.putImageData(imageData, 0, 0);
+
+    // 合成
+    ctx.drawImage(tempCanvas, 0, 0);
+
+    // ダウンロードリンク作成
+    const link = document.createElement('a');
+    link.download = 'merged.png';
+    link.href = canvas.toDataURL();
+    link.click();
+}
 </script>
 </body>
 </html>
