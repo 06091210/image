@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>白色を透過して合成＆ダウンロード</title>
+<style>
+  :root { --gap: 12px; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background:#111; color:#eee; }
+  header { padding: 16px; text-align: center; font-weight: 700; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 16px 24px; }
+  .panel { display: grid; gap: var(--gap); grid-template-columns: 1fr; }
+  .controls, .canvasWrap { background:#1b1b1b; border-radius: 16px; padding: 16px; box-shadow: 0 6px 20px rgba(0,0,0,.3); }
+  .row { display:flex; flex-wrap:wrap; gap:var(--gap); align-items:center; }
+  label.file {
+    display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 999px;
+    background:#2a2a2a; cursor: pointer; user-select: none;
+  }
+  label.file input { display:none; }
+  .hint { opacity:.8; font-size:.9rem; }
+  .slider { display:grid; grid-template-columns: 110px 1fr 64px; gap:10px; align-items:center; }
+  input[type="range"] { width:100%; }
+  button {
+    padding: 10px 14px; border-radius: 12px; border: none; background:#3a3a3a; color:#fff; cursor:pointer;
+  }
+  button.primary { background:#5a6fff; }
+  canvas { width:100%; height:auto; background:#000; border-radius: 12px; display:block; }
+  .badge { font-size:.85rem; opacity:.8; }
+  @media (min-width: 840px) {
+    .panel { grid-template-columns: 360px 1fr; }
+  }
+</style>
+</head>
+<body>
+  <header>画像Aの白を透過 → 画像Bに合成 → PNGダウンロード</header>
+  <div class="wrap">
+    <div class="panel">
+      <div class="controls">
+        <div class="row" style="justify-content:space-between;">
+          <label class="file">画像A（白を抜く）
+            <input id="fileA" type="file" accept="image/*">
+          </label>
+          <label class="file">画像B（背景）
+            <input id="fileB" type="file" accept="image/*">
+          </label>
+        </div>
+
+        <div style="margin-top:16px; display:grid; gap:14px;">
+          <div class="slider">
+            <div>白さしきい値</div>
+            <input id="thresh" type="range" min="0" max="255" value="240" />
+            <output id="threshOut">240</output>
+          </div>
+
+          <div class="slider">
+            <div>Aの不透明度</div>
+            <input id="opacity" type="range" min="0" max="100" value="100" />
+            <output id="opacityOut">100%</output>
+          </div>
+
+          <div class="slider">
+            <div>Aの拡大率</div>
+            <input id="scale" type="range" min="10" max="300" value="100" />
+            <output id="scaleOut">100%</output>
+          </div>
+
+          <div class="row" style="justify-content:space-between;">
+            <span class="hint">※ A画像はキャンバス上でドラッグして位置調整できます（タッチ対応）。</span>
+            <div class="row">
+              <button id="fitA">Aを中央へ</button>
+              <button id="reset">リセット</button>
+              <button id="download" class="primary">PNGをダウンロード</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="canvasWrap">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px;">
+          <div class="badge">プレビュー</div>
+          <div class="badge" id="sizeInfo">キャンバス: - × -</div>
+        </div>
+        <canvas id="c"></canvas>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const $ = (s)=>document.querySelector(s);
+  const c = $("#c");
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+
+  // UI
+  const fileA = $("#fileA");
+  const fileB = $("#fileB");
+  const thresh = $("#thresh"); const threshOut = $("#threshOut");
+  const opacity = $("#opacity"); const opacityOut = $("#opacityOut");
+  const scale = $("#scale"); const scaleOut = $("#scaleOut");
+  const btnFitA = $("#fitA");
+  const btnReset = $("#reset");
+  const btnDownload = $("#download");
+  const sizeInfo = $("#sizeInfo");
+
+  // State
+  let imgA = null, imgB = null;
+  let maskedABitmap = null;      // Offscreen canvas for masked A
+  let maskedAImg = null;         // HTMLImageElement created from mask for drawImage
+  let ax = 0, ay = 0;            // A position
+  let aScale = 1;                // A scale
+  let dragging = false, dragStart = {x:0,y:0}, startPos = {x:0,y:0};
+
+  // Helpers
+  function loadImageFromFile(file){
+    return new Promise((resolve,reject)=>{
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = (e)=>{ URL.revokeObjectURL(url); reject(e); };
+      img.src = url;
+    });
+  }
+
+  function setCanvasToB(){
+    if(!imgB) return;
+    c.width = imgB.naturalWidth || imgB.width;
+    c.height = imgB.naturalHeight || imgB.height;
+    sizeInfo.textContent = `キャンバス: ${c.width} × ${c.height}px`;
+  }
+
+  function centerA(){
+    if(!imgA || !c.width) return;
+    const aw = (imgA.naturalWidth || imgA.width) * aScale;
+    const ah = (imgA.naturalHeight || imgA.height) * aScale;
+    ax = (c.width - aw)/2;
+    ay = (c.height - ah)/2;
+  }
+
+  function rebuildMaskedA(){
+    if(!imgA) return;
+    const w = imgA.naturalWidth || imgA.width;
+    const h = imgA.naturalHeight || imgA.height;
+
+    // Create offscreen canvas
+    const off = document.createElement("canvas");
+    off.width = w; off.height = h;
+    const octx = off.getContext("2d", { willReadFrequently: true });
+    octx.drawImage(imgA, 0, 0);
+
+    const th = parseInt(thresh.value, 10);
+    const imgData = octx.getImageData(0,0,w,h);
+    const data = imgData.data;
+
+    // Make "white-ish" pixels transparent:
+    // 条件: r>=th && g>=th && b>=th → alpha = 0
+    for (let i=0; i<data.length; i+=4){
+      const r = data[i], g = data[i+1], b = data[i+2];
+      if (r >= th && g >= th && b >= th){
+        data[i+3] = 0; // alpha
+      }
+    }
+    octx.putImageData(imgData, 0, 0);
+
+    maskedABitmap = off;
+    // For faster drawImage on some browsers, create an Image object
+    maskedAImg = new Image();
+    maskedAImg.src = off.toDataURL("image/png");
+  }
+
+  function redraw(){
+    if(!imgB || !c.width) return;
+    // Draw B
+    ctx.clearRect(0,0,c.width,c.height);
+    ctx.drawImage(imgB, 0, 0, c.width, c.height);
+
+    if (maskedAImg){
+      const ow = imgA.naturalWidth || imgA.width;
+      const oh = imgA.naturalHeight || imgA.height;
+      const drawW = Math.max(1, Math.round(ow * aScale));
+      const drawH = Math.max(1, Math.round(oh * aScale));
+
+      // Apply extra opacity for A
+      ctx.save();
+      ctx.globalAlpha = parseInt(opacity.value,10) / 100;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(maskedAImg, ax, ay, drawW, drawH);
+      ctx.restore();
+    }
+  }
+
+  function resetAll(){
+    thresh.value = 240; threshOut.textContent = "240";
+    opacity.value = 100; opacityOut.textContent = "100%";
+    scale.value = 100; scaleOut.textContent = "100%";
+    aScale = 1; ax = 0; ay = 0;
+    if (imgA && c.width) centerA();
+    rebuildMaskedA();
+    redraw();
+  }
+
+  // Events - file load
+  fileA.addEventListener("change", async (e)=>{
+    const f = e.target.files?.[0];
+    if(!f) return;
+    imgA = await loadImageFromFile(f);
+    if (!c.width && imgB) setCanvasToB();
+    if (c.width && !imgB){
+      // まだBがない場合、キャンバスをAサイズにしておく（暫定）
+      c.width = imgA.naturalWidth || imgA.width;
+      c.height = imgA.naturalHeight || imgA.height;
+      sizeInfo.textContent = `キャンバス: ${c.width} × ${c.height}px`;
+    }
+    aScale = 1;
+    centerA();
+    rebuildMaskedA();
+    redraw();
+  });
+
+  fileB.addEventListener("change", async (e)=>{
+    const f = e.target.files?.[0];
+    if(!f) return;
+    imgB = await loadImageFromFile(f);
+    setCanvasToB();
+    if (imgA) centerA();
+    rebuildMaskedA();
+    redraw();
+  });
+
+  // Events - sliders
+  thresh.addEventListener("input", ()=>{
+    threshOut.textContent = thresh.value;
+    rebuildMaskedA();
+    redraw();
+  });
+
+  opacity.addEventListener("input", ()=>{
+    opacityOut.textContent = opacity.value + "%";
+    redraw();
+  });
+
+  scale.addEventListener("input", ()=>{
+    scaleOut.textContent = scale.value + "%";
+    aScale = parseInt(scale.value,10) / 100;
+    // 位置は保持（必要なら中央配置ボタンで戻せる）
+    redraw();
+  });
+
+  // Buttons
+  btnFitA.addEventListener("click", ()=>{
+    centerA();
+    redraw();
+  });
+
+  btnReset.addEventListener("click", ()=>{
+    resetAll();
+  });
+
+  btnDownload.addEventListener("click", ()=>{
+    if (!c.width) return;
+    const url = c.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "composited.png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  // Drag move for A
+  function getEventPos(ev){
+    if (ev.touches && ev.touches[0]){
+      const rect = c.getBoundingClientRect();
+      return {
+        x: (ev.touches[0].clientX - rect.left) * (c.width / rect.width),
+        y: (ev.touches[0].clientY - rect.top) * (c.height / rect.height),
+      };
+    } else {
+      const rect = c.getBoundingClientRect();
+      return {
+        x: (ev.clientX - rect.left) * (c.width / rect.width),
+        y: (ev.clientY - rect.top) * (c.height / rect.height),
+      };
+    }
+  }
+
+  function isOverA(pos){
+    if (!imgA) return false;
+    const ow = (imgA.naturalWidth || imgA.width) * aScale;
+    const oh = (imgA.naturalHeight || imgA.height) * aScale;
+    return pos.x >= ax && pos.x <= ax + ow && pos.y >= ay && pos.y <= ay + oh;
+  }
+
+  c.addEventListener("mousedown", (e)=>{
+    const p = getEventPos(e);
+    if (isOverA(p)){
+      dragging = true;
+      dragStart = p;
+      startPos = { x: ax, y: ay };
+    }
+  });
+  window.addEventListener("mousemove", (e)=>{
+    if (!dragging) return;
+    const p = getEventPos(e);
+    ax = startPos.x + (p.x - dragStart.x);
+    ay = startPos.y + (p.y - dragStart.y);
+    redraw();
+  });
+  window.addEventListener("mouseup", ()=> dragging = false);
+
+  c.addEventListener("touchstart", (e)=>{
+    const p = getEventPos(e);
+    if (isOverA(p)){
+      dragging = true;
+      dragStart = p;
+      startPos = { x: ax, y: ay };
+      e.preventDefault();
+    }
+  }, {passive:false});
+  c.addEventListener("touchmove", (e)=>{
+    if (!dragging) return;
+    const p = getEventPos(e);
+    ax = startPos.x + (p.x - dragStart.x);
+    ay = startPos.y + (p.y - dragStart.y);
+    redraw();
+    e.preventDefault();
+  }, {passive:false});
+  c.addEventListener("touchend", ()=> dragging = false);
+
+  // 初期
+  resetAll();
+})();
+</script>
+</body>
+</html>
