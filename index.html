@@ -2,100 +2,96 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>画像合成＆透過</title>
+<title>画像透過＆合成</title>
 <style>
-  body { font-family: sans-serif; text-align: center; }
-  canvas { border: 1px solid #ccc; margin-top: 10px; }
+  body { font-family: sans-serif; }
+  input { margin: 5px; }
 </style>
 </head>
 <body>
+<h2>画像透過＆合成ツール</h2>
 
-<h2>画像A（透明化する部分あり）</h2>
-<input type="file" id="imgA" accept="image/*"><br>
-
-<h2>画像B（背景）</h2>
-<input type="file" id="imgB" accept="image/*"><br>
-
-<h2>透過させる色（カラーコード）</h2>
-<input type="color" id="colorPicker" value="#ffffff"><br><br>
-
-<button id="processBtn">合成してダウンロード</button>
+<label>A画像: <input type="file" id="imageA" accept="image/*"></label><br>
+<label>B画像: <input type="file" id="imageB" accept="image/*"></label><br>
+<label>透過色（カラーコード）: <input type="color" id="colorCode" value="#ffffff"></label><br>
+<label>許容差(0〜255): <input type="number" id="tolerance" value="30" min="0" max="255"></label><br>
+<button id="process">合成してダウンロード</button>
 <br><br>
 <canvas id="canvas"></canvas>
 
 <script>
-const imgA = document.getElementById('imgA');
-const imgB = document.getElementById('imgB');
-const colorPicker = document.getElementById('colorPicker');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+function loadImage(file) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.src = URL.createObjectURL(file);
+    });
+}
 
-document.getElementById('processBtn').addEventListener('click', () => {
-    if (!imgA.files[0] || !imgB.files[0]) {
-        alert("画像AとBを両方選択してください。");
+document.getElementById('process').addEventListener('click', async () => {
+    const fileA = document.getElementById('imageA').files[0];
+    const fileB = document.getElementById('imageB').files[0];
+    const colorHex = document.getElementById('colorCode').value;
+    const tolerance = parseInt(document.getElementById('tolerance').value, 10);
+
+    if (!fileA || !fileB) {
+        alert("AとBの画像を選択してください");
         return;
     }
 
-    const imageA = new Image();
-    const imageB = new Image();
+    const imgA = await loadImage(fileA);
+    const imgB = await loadImage(fileB);
 
-    // 画像読み込み完了後の処理
-    imageB.onload = () => {
-        imageA.onload = () => {
-            // canvasサイズをB画像に合わせる
-            canvas.width = imageB.width;
-            canvas.height = imageB.height;
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = Math.max(imgA.width, imgB.width);
+    canvas.height = Math.max(imgA.height, imgB.height);
 
-            // Bを描画
-            ctx.drawImage(imageB, 0, 0);
+    // まずBを描画
+    ctx.drawImage(imgB, 0, 0);
 
-            // Aを一時キャンバスに描画
-            let tempCanvas = document.createElement('canvas');
-            let tempCtx = tempCanvas.getContext('2d');
-            tempCanvas.width = imageA.width;
-            tempCanvas.height = imageA.height;
-            tempCtx.drawImage(imageA, 0, 0);
+    // Aを別キャンバスで読み込み
+    const tempCanvas = document.createElement('canvas');
+    const tctx = tempCanvas.getContext('2d');
+    tempCanvas.width = imgA.width;
+    tempCanvas.height = imgA.height;
+    tctx.drawImage(imgA, 0, 0);
 
-            // 透過処理
-            let imgData = tempCtx.getImageData(0, 0, imageA.width, imageA.height);
-            let data = imgData.data;
+    const imgData = tctx.getImageData(0, 0, imgA.width, imgA.height);
+    const data = imgData.data;
 
-            const hex = colorPicker.value; // #RRGGBB
-            const rT = parseInt(hex.substr(1, 2), 16);
-            const gT = parseInt(hex.substr(3, 2), 16);
-            const bT = parseInt(hex.substr(5, 2), 16);
+    // 透過色のRGB取得
+    const targetR = parseInt(colorHex.substr(1, 2), 16);
+    const targetG = parseInt(colorHex.substr(3, 2), 16);
+    const targetB = parseInt(colorHex.substr(5, 2), 16);
 
-            const tolerance = 5; // 色の許容範囲（多少ズレても透過）
+    for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
 
-            for (let i = 0; i < data.length; i += 4) {
-                const r = data[i];
-                const g = data[i + 1];
-                const b = data[i + 2];
+        // 色距離（Euclidean distance）
+        const dist = Math.sqrt(
+            (r - targetR) ** 2 +
+            (g - targetG) ** 2 +
+            (b - targetB) ** 2
+        );
 
-                if (Math.abs(r - rT) <= tolerance &&
-                    Math.abs(g - gT) <= tolerance &&
-                    Math.abs(b - bT) <= tolerance) {
-                    data[i + 3] = 0; // アルファを0（透過）
-                }
-            }
-            tempCtx.putImageData(imgData, 0, 0);
+        if (dist <= tolerance) {
+            data[i + 3] = 0; // アルファ値を0（透明）に
+        }
+    }
 
-            // AをBの上に描画
-            ctx.drawImage(tempCanvas, 0, 0);
+    tctx.putImageData(imgData, 0, 0);
 
-            // ダウンロード
-            const link = document.createElement('a');
-            link.download = 'combined.png';
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-        };
+    // Bの上に透過済みAを描画
+    ctx.drawImage(tempCanvas, 0, 0);
 
-        // Aを読み込み
-        imageA.src = URL.createObjectURL(imgA.files[0]);
-    };
-
-    // Bを読み込み
-    imageB.src = URL.createObjectURL(imgB.files[0]);
+    // ダウンロード
+    const link = document.createElement('a');
+    link.download = 'combined.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
 });
 </script>
 </body>
