@@ -2,104 +2,101 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>画像合成＆色透過</title>
+<title>画像合成＆透過</title>
 <style>
-  body { font-family: sans-serif; }
-  canvas { border: 1px solid #ccc; max-width: 100%; }
+  body { font-family: sans-serif; text-align: center; }
+  canvas { border: 1px solid #ccc; margin-top: 10px; }
 </style>
 </head>
 <body>
-<h3>画像A（透過対象）</h3>
-<input type="file" id="imgAInput" accept="image/*"><br>
 
-<h3>画像B（背景）</h3>
-<input type="file" id="imgBInput" accept="image/*"><br>
+<h2>画像A（透明化する部分あり）</h2>
+<input type="file" id="imgA" accept="image/*"><br>
 
-<h3>透過する色（カラーコード）</h3>
-<input type="color" id="colorInput" value="#ffffff"><br><br>
+<h2>画像B（背景）</h2>
+<input type="file" id="imgB" accept="image/*"><br>
 
-<button id="mergeBtn">合成</button>
-<button id="downloadBtn">ダウンロード</button>
+<h2>透過させる色（カラーコード）</h2>
+<input type="color" id="colorPicker" value="#ffffff"><br><br>
+
+<button id="processBtn">合成してダウンロード</button>
 <br><br>
-
 <canvas id="canvas"></canvas>
 
 <script>
-const imgAInput = document.getElementById('imgAInput');
-const imgBInput = document.getElementById('imgBInput');
-const colorInput = document.getElementById('colorInput');
+const imgA = document.getElementById('imgA');
+const imgB = document.getElementById('imgB');
+const colorPicker = document.getElementById('colorPicker');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
-let imgA = new Image();
-let imgB = new Image();
-
-function loadImage(file, callback) {
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-  img.onload = () => {
-    URL.revokeObjectURL(url);
-    callback(img);
-  };
-  img.src = url;
-}
-
-document.getElementById('mergeBtn').onclick = () => {
-  if (!imgAInput.files[0] || !imgBInput.files[0]) {
-    alert("画像AとBを選択してください");
-    return;
-  }
-  
-  loadImage(imgBInput.files[0], (loadedB) => {
-    imgB = loadedB;
-    loadImage(imgAInput.files[0], (loadedA) => {
-      imgA = loadedA;
-      mergeImages();
-    });
-  });
-};
-
-function mergeImages() {
-  canvas.width = imgB.width;
-  canvas.height = imgB.height;
-  
-  // 背景Bを描画
-  ctx.drawImage(imgB, 0, 0);
-  
-  // Aを描画
-  ctx.drawImage(imgA, 0, 0);
-  
-  // 指定色を透過
-  let imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  let data = imgData.data;
-  
-  const targetColor = hexToRgb(colorInput.value);
-  
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i] === targetColor.r &&
-        data[i+1] === targetColor.g &&
-        data[i+2] === targetColor.b) {
-      data[i+3] = 0; // アルファ値を0に
+document.getElementById('processBtn').addEventListener('click', () => {
+    if (!imgA.files[0] || !imgB.files[0]) {
+        alert("画像AとBを両方選択してください。");
+        return;
     }
-  }
-  
-  ctx.putImageData(imgData, 0, 0);
-}
 
-function hexToRgb(hex) {
-  let bigint = parseInt(hex.slice(1), 16);
-  let r = (bigint >> 16) & 255;
-  let g = (bigint >> 8) & 255;
-  let b = bigint & 255;
-  return {r, g, b};
-}
+    const imageA = new Image();
+    const imageB = new Image();
 
-document.getElementById('downloadBtn').onclick = () => {
-  const link = document.createElement('a');
-  link.download = 'merged.png';
-  link.href = canvas.toDataURL('image/png');
-  link.click();
-};
+    // 画像読み込み完了後の処理
+    imageB.onload = () => {
+        imageA.onload = () => {
+            // canvasサイズをB画像に合わせる
+            canvas.width = imageB.width;
+            canvas.height = imageB.height;
+
+            // Bを描画
+            ctx.drawImage(imageB, 0, 0);
+
+            // Aを一時キャンバスに描画
+            let tempCanvas = document.createElement('canvas');
+            let tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = imageA.width;
+            tempCanvas.height = imageA.height;
+            tempCtx.drawImage(imageA, 0, 0);
+
+            // 透過処理
+            let imgData = tempCtx.getImageData(0, 0, imageA.width, imageA.height);
+            let data = imgData.data;
+
+            const hex = colorPicker.value; // #RRGGBB
+            const rT = parseInt(hex.substr(1, 2), 16);
+            const gT = parseInt(hex.substr(3, 2), 16);
+            const bT = parseInt(hex.substr(5, 2), 16);
+
+            const tolerance = 5; // 色の許容範囲（多少ズレても透過）
+
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+
+                if (Math.abs(r - rT) <= tolerance &&
+                    Math.abs(g - gT) <= tolerance &&
+                    Math.abs(b - bT) <= tolerance) {
+                    data[i + 3] = 0; // アルファを0（透過）
+                }
+            }
+            tempCtx.putImageData(imgData, 0, 0);
+
+            // AをBの上に描画
+            ctx.drawImage(tempCanvas, 0, 0);
+
+            // ダウンロード
+            const link = document.createElement('a');
+            link.download = 'combined.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        };
+
+        // Aを読み込み
+        imageA.src = URL.createObjectURL(imgA.files[0]);
+    };
+
+    // Bを読み込み
+    imageB.src = URL.createObjectURL(imgB.files[0]);
+});
 </script>
 </body>
 </html>
